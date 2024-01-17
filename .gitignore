@@ -1,0 +1,10 @@
+.ghci
+.vim
+dist-newstyle/
+cabal.project.local
+.stack-work/
+/*.prof
+/*.ps
+/*.hp
+tags
+TAGS
