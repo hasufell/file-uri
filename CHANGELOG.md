@@ -1,5 +1,6 @@
 # Revision history for file-uri
 
-## 0.1.0.0 -- YYYY-mm-dd
+## 0.1.0.0 -- 2024-01-19
 
-* First version. Released on an unsuspecting world.
+* Initial release
+
