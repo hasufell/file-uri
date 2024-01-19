@@ -23,13 +23,15 @@
 module System.URI.File (
   -- * Data types
   FileURI(..)
-, ParseConfig(..)
+, ParseSyntax(..)
 
   -- * Parsing
 , parseFileURI
 
   -- * Attoparsec parsers
 , fileURIStrictP
+, fileURIExtendedPosixP
+, fileURIExtendedWindowsP
 ) where
 
 import System.URI.File.Internal

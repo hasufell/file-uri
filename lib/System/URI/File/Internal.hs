@@ -17,24 +17,29 @@ import qualified Data.Attoparsec.ByteString.Char8 as A (decimal)
 import qualified Data.ByteString as BS
 
 
+-- $setup
+-- >>> :set -XOverloadedStrings
+
+
 
     -----------------------
     --[ Main data types ]--
     -----------------------
 
 
--- | A parsed file URI. It can have an auth part.
--- Use 'parseFileURI' to obtain it.
+-- | A parsed file URI. It can have an auth/host part.
 data FileURI = FileURI {
-    fileAuth :: Maybe ByteString   -- ^ optional host part ("localhost" is parsed as 'Nothing')
+    fileAuth :: Maybe ByteString   -- ^ optional host part ("localhost" is parsed as 'Nothing'); <https://learn.microsoft.com/en-us/dotnet/standard/io/file-path-formats#unc-paths UNC> paths on windows go into 'filePath' and are not split
   , filePath :: ByteString         -- ^ the proper absolute filepath
   } deriving (Show, Eq)
 
 
 -- | RFC syntax configuration.
-data ParseConfig = Strict -- ^ Only parses the strict syntax according to <https://www.rfc-editor.org/rfc/rfc8089.html#section-2 section 2 of RFC 8089>
-                 | Extended -- ^ Also parses windows filepaths and UNC names described in <https://www.rfc-editor.org/rfc/rfc8089.html#appendix-F Appendix F>
+data ParseSyntax = StrictPosix   -- ^ Only parses the strict syntax according to <https://www.rfc-editor.org/rfc/rfc8089.html#section-2 section 2 of RFC 8089>, which is technically posix paths.
+                 | ExtendedPosix -- ^ Also parses extended user information described in <https://www.rfc-editor.org/rfc/rfc8089.html#appendix-E.1 E.1>
+                 | ExtendedWindows -- ^ Parses windows paths according to <https://www.rfc-editor.org/rfc/rfc8089.html#appendix-E.1 E.1>, <https://www.rfc-editor.org/rfc/rfc8089.html#appendix-E.2 E.2> and <https://www.rfc-editor.org/rfc/rfc8089.html#appendix-E.3 E.3>. Unlike the spec, posix paths are rejected.
   deriving (Show, Eq)
+
 
 
 
@@ -44,10 +49,33 @@ data ParseConfig = Strict -- ^ Only parses the strict syntax according to <https
 
 
 -- | Parse a file URI such as @file:\/\/\/foo\/bar@ into 'FileURI'.
-parseFileURI :: ParseConfig  -- ^ RFC syntax configuration
+--
+-- >>> parseFileURI StrictPosix "file:/path/to/file"
+-- Right (FileURI {fileAuth = Nothing, filePath = "/path/to/file"})
+-- >>> parseFileURI StrictPosix "file:///path/to/file"
+-- Right (FileURI {fileAuth = Nothing, filePath = "/path/to/file"})
+-- >>> parseFileURI StrictPosix "file://hostname/path/to/file"
+-- Right (FileURI {fileAuth = Just "hostname", filePath = "/path/to/file"})
+-- >>> parseFileURI StrictPosix "file://localhost/path/to/file"
+-- Right (FileURI {fileAuth = Nothing, filePath = "/path/to/file"})
+-- >>> parseFileURI StrictPosix "http://localhost/path/to/file"
+-- Left "string"
+-- >>> parseFileURI StrictPosix "/path/to/file"
+-- Left "string"
+-- >>> parseFileURI ExtendedWindows "file://///host.example.com/path/to/file"
+-- Right (FileURI {fileAuth = Nothing, filePath = "//host.example.com/path/to/file"})
+-- >>> parseFileURI ExtendedWindows "file:///c:/path/to/file"
+-- Right (FileURI {fileAuth = Nothing, filePath = "c:/path/to/file"})
+-- >>> parseFileURI ExtendedWindows "file:/c:/path/to/file"
+-- Right (FileURI {fileAuth = Nothing, filePath = "c:/path/to/file"})
+-- >>> parseFileURI ExtendedWindows "file:c:/path/to/file"
+-- Right (FileURI {fileAuth = Nothing, filePath = "c:/path/to/file"})
+parseFileURI :: ParseSyntax  -- ^ RFC syntax configuration
              -> ByteString   -- ^ input file URI
              -> Either String FileURI
-parseFileURI Strict = A.parseOnly fileURIStrictP
+parseFileURI StrictPosix     = A.parseOnly (fileURIStrictP          <* A.endOfInput)
+parseFileURI ExtendedPosix   = A.parseOnly (fileURIExtendedPosixP   <* A.endOfInput)
+parseFileURI ExtendedWindows = A.parseOnly (fileURIExtendedWindowsP <* A.endOfInput)
 
 
 
@@ -78,9 +106,107 @@ fileURIStrictP :: Parser FileURI
 fileURIStrictP = A.string "file:" *> fileHierPart
  where
   fileHierPart = (A.string "//" *> authPath) <|> localPath
-  authPath = FileURI <$> ((const Nothing <$> A.string "localhost") <|> A.option Nothing (Just <$> hostP)) <*> pathAbsoluteP
+  authPath = (\mfA -> FileURI (if mfA == Just "localhost" then Nothing else mfA))
+          <$> A.option Nothing (Just <$> fileAuth')
+          <*> pathAbsoluteP
+  fileAuth' = A.string "localhost" <|> hostP
   localPath = FileURI Nothing <$> pathAbsoluteP
 
+-- | Parse a file URI according to the <https://www.rfc-editor.org/rfc/rfc8089.html#section-2 main ABNF in RFC 8089>, with
+-- extended rule <https://www.rfc-editor.org/rfc/rfc8089.html#appendix-E.1 E.1>.
+--
+-- @
+--    file-URI       = file-scheme ":" file-hier-part
+--
+--    file-scheme    = "file"
+--
+--    file-hier-part = ( "//" auth-path )
+--                   / local-path
+--
+--    auth-path      = [ file-auth ] path-absolute
+--
+--    local-path     = path-absolute
+--
+--    file-auth      = "localhost"
+--                   / [ userinfo "@" ] host
+-- @
+fileURIExtendedPosixP :: Parser FileURI
+fileURIExtendedPosixP = A.string "file:" *> fileHierPart
+ where
+  fileHierPart = (A.string "//" *> authPath) <|> localPath
+  authPath = (\mfA -> FileURI (if mfA == Just "localhost" then Nothing else mfA))
+          <$> A.option Nothing (Just <$> fileAuth')
+          <*> pathAbsoluteP
+  fileAuth' = A.string "localhost" <|> sequenceM [A.option BS.empty (sequenceM [userInfoP, "@"]), hostP]
+  localPath = FileURI Nothing <$> pathAbsoluteP
+
+
+-- | Parse a file URI according for windows according to <https://www.rfc-editor.org/rfc/rfc8089.html#appendix-E.1 E.1>,
+-- <https://www.rfc-editor.org/rfc/rfc8089.html#appendix-E.2 E.2> and
+-- <https://www.rfc-editor.org/rfc/rfc8089.html#appendix-E.3 E.3>. Unlike the spec, posix paths are rejected. The ABNF
+-- is a slight modification of <https://www.rfc-editor.org/rfc/rfc8089.html#appendix-F Appendix F>.
+--
+-- @
+--    file-URI       = file-scheme ":" file-hier-part
+--
+--    file-scheme    = "file"
+--
+--    file-hier-part = ( "//" auth-path )
+--                   / local-path
+--
+--    auth-path      = [ file-auth ] file-absolute
+--                   / unc-authority path-absolute
+--
+--    local-path     =  drive-letter path-absolute
+--                   / file-absolute
+--
+--    file-auth      = "localhost"
+--                   / [ userinfo "@" ] host
+--
+--    unc-authority  = 2*3"/" file-host
+--
+--    file-host      = inline-IP / IPv4address / reg-name
+--
+--    inline-IP      = "%5B" ( IPv6address / IPvFuture ) "%5D"
+--
+--    file-absolute  = "/" drive-letter path-absolute
+--
+--    drive-letter   = ALPHA ":"
+--                   / ALPHA "|"
+-- @
+fileURIExtendedWindowsP :: Parser FileURI
+fileURIExtendedWindowsP = A.string "file:" *> fileHierPart
+ where
+  fileHierPart = (A.string "//" *> authPath) <|> localPath
+  authPath = (\(mfA, p) -> FileURI (if mfA == Just "localhost" then Nothing else mfA) p) <$> (
+          ((,) <$> A.option Nothing (Just <$> fileAuth') <*> fileAbsoluteP <* A.endOfInput)
+      <|> ((,) <$> pure Nothing <*> sequenceM [uncAuthorityP, pathAbsoluteP] <* A.endOfInput)
+    )
+  fileAuth' = A.string "localhost" <|> sequenceM [A.option BS.empty (sequenceM [userInfoP, "@"]), hostP]
+  localPath = fmap (FileURI Nothing) $ (fileAbsoluteP <* A.endOfInput) <|>
+                                       (sequenceM [driveLetterP', pathAbsoluteP] <* A.endOfInput)
+
+pathAbsoluteP :: Parser ByteString
+pathAbsoluteP = sequenceM [A.string "/", A.option BS.empty $ sequenceM [segmentNZP, pathAbEmpty]]
+
+uncAuthorityP :: Parser ByteString
+uncAuthorityP = (\a b -> BS.concat [a, b]) <$> (A.string "//" <* (A.option BS.empty (A.string "/"))) <*> fileHostP
+
+fileHostP :: Parser ByteString
+fileHostP = hostP
+
+fileAbsoluteP :: Parser ByteString
+fileAbsoluteP = A.string "/" *> sequenceM [driveLetterP', pathAbsoluteP]
+
+driveLetterP :: Parser Word8
+driveLetterP = A.satisfy (A.inClass alpha) <* (A.string ":" <|> A.string "|")
+
+-- | Like 'driveLetterP', but appends ':'.
+driveLetterP' :: Parser ByteString
+driveLetterP' = ((<> ":") . BS.singleton) <$> driveLetterP
+
+userInfoP :: Parser ByteString
+userInfoP = BS.pack <$> many (pctEncodedP <|> satisfyClass (":" ++ subDelims ++ unreserved))
 
 hostP :: Parser ByteString
 hostP = ipLiteralP <|> ipV4P <|> regNameP
@@ -147,9 +273,6 @@ ipV4P =
 
 pathAbEmpty :: Parser ByteString
 pathAbEmpty = fmap BS.concat . many . sequenceM $ [A.string "/", segmentP]
-
-pathAbsoluteP :: Parser ByteString
-pathAbsoluteP = sequenceM [A.string "/", A.option BS.empty $ sequenceM [segmentNZP, pathAbEmpty]]
 
 segmentP :: Parser ByteString
 segmentP = BS.pack <$> A.many' pcharP
@@ -229,46 +352,4 @@ parseBetween :: (Alternative m, Monad m) => Int -> Int -> m a -> m [a]
 parseBetween a b f = A.choice parsers
   where
     parsers = map (`A.count` f) $ reverse $ range (a, b)
-
-
-
-
-
-
-{--
-   ----------- main spec -------------
-
-      file-URI       = file-scheme ":" file-hier-part
-
-      file-scheme    = "file"
-
-      file-hier-part = ( "//" auth-path )
-                     / local-path
-
-      auth-path      = [ file-auth ] path-absolute
-
-      local-path     = path-absolute
-
-      file-auth      = "localhost"
-                     / host
-
-   ----------- windows appendix -------------
-
-      local-path     = [ drive-letter ] path-absolute
-
-      drive-letter   = ALPHA ":"
-
-
-   ----------- imported from RFC 3986 -------------
-
-      host        = IP-literal / IPv4address / reg-name
-      path-absolute = "/" [ segment-nz *( "/" segment ) ]
-
-      segment       = *pchar
-      segment-nz    = 1*pchar
-      segment-nz-nc = 1*( unreserved / pct-encoded / sub-delims / "@" )
-                    ; non-zero-length segment without any colon ":"
-
-      pchar         = unreserved / pct-encoded / sub-delims / ":" / "@"
---}
 
