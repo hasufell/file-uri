@@ -1,4 +1,4 @@
-# file-uri
+# file-uri [![Hackage](https://img.shields.io/hackage/v/file-uri.svg)](https://hackage.haskell.org/package/file-uri) [![GitHub Build Status](https://github.com/hasufell/file-uri/workflows/test/badge.svg)](https://github.com/hasufell/file-uri/actions?query=workflow%3Atest)
 
 This Haskell library parses `file:///foo/bar` URIs based on RFC [8089](https://www.rfc-editor.org/rfc/rfc8089.html),
 including windows filepaths. It's a subset of [RFC3986](https://www.rfc-editor.org/rfc/rfc3986),
