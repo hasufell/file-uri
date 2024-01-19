@@ -16,7 +16,7 @@
 -- efficient ByteStrings for parsing and representing the data.
 --
 -- As such it only parses a subset of <https://www.rfc-editor.org/rfc/rfc3986 RFC3986>, but is better at interpreting
--- the file paths. **Filepaths are always absolute according to the spec**.
+-- the file paths. __Filepaths are always absolute according to the spec__.
 --
 -- Part of this module was ripped off of the <https://hackage.haskell.org/package/uri-bytestring uri-bytestring> package from
 -- Soostone (specifically the host part parsing).
