@@ -16,7 +16,7 @@ extra-doc-files:    CHANGELOG.md
 --
 source-repository head
   type:     git
-  location: https://github.com/haskell/ghcup-hs.git
+  location: https://github.com/hasufell/file-uri.git
 
 common warnings
     ghc-options: -Wall
