@@ -33,6 +33,10 @@ parseFileURIStrict =
       (Right FileURI { fileAuth = Just "hostname", filePath = "/path/to/file" })
     , parseTestURI Strict "file://localhost/path/to/file"
       (Right FileURI { fileAuth = Nothing, filePath = "/path/to/file" })
+    , parseTestURI Strict "http://localhost/path/to/file"
+      (Left "string")
+    , parseTestURI Strict "/path/to/file"
+      (Left "string")
     ]
 
 
